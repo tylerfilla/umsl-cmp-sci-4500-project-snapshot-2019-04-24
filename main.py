@@ -6,10 +6,12 @@
 #
 
 import asyncio
+import threading
 
 import cozmo
 import cv2
 import dlib
+import face_recognition
 import numpy
 
 # The camera frame counter
@@ -21,8 +23,67 @@ face_classifier = cv2.CascadeClassifier('haarcascade_frontalface_alt.xml')
 # The outstanding face trackers
 face_trackers = {}
 
+# Identities assigned to outstanding face trackers
+face_tracker_identities = {}
+
 # The next face tracker ID to assign
-next_face_id = 0
+next_tracker_id = 0
+
+# Encodings of all known faces
+known_face_encodings = []
+
+# Names of all known faces
+known_face_names = []
+
+
+def recognize(image, tracker_id):
+    """
+    Perform face recognition on the ID'd tracker.
+
+    @param image The face image in OpenCV BGR format
+    @param tracker_id The target tracker
+    """
+
+    global face_trackers
+    global face_tracker_identities
+    global known_face_encodings
+    global known_face_names
+
+    # Convert to RGB
+    image_rgb = image[:, :, ::-1]
+
+    # Find tighter bounds on the face
+    locations = face_recognition.face_locations(image_rgb)
+    encodings = face_recognition.face_encodings(image_rgb, locations)
+
+    if len(encodings) != 1:
+        print('Failed to recognize face! Untracking...')
+
+        # Kill the tracker so maybe we can get a better look
+        del face_trackers[tracker_id]
+        return
+
+    # First and only encoding
+    encoding = encodings[0]
+
+    # Compare against known faces
+    matches = face_recognition.compare_faces(known_face_encodings, encoding)
+
+    # Get name associated with first match
+    if True in matches:
+        print('This is a known face!')
+
+        first_match_index = matches.index(True)
+
+        # Identify the face tracker
+        face_tracker_identities[tracker_id] = known_face_names[first_match_index]
+
+        return
+
+    print('Hmm... Never seen this face before!')
+    known_face_encodings.append(encoding)
+    known_face_names.append(f'{tracker_id}')
+    face_tracker_identities[tracker_id] = f'{tracker_id}'
 
 
 def on_new_raw_camera_image(evt, **kwargs):
@@ -36,7 +97,8 @@ def on_new_raw_camera_image(evt, **kwargs):
     global frame_counter
     global face_classifier
     global face_trackers
-    global next_face_id
+    global face_tracker_identities
+    global next_tracker_id
 
     # Increment frame counter
     frame_counter += 1
@@ -51,17 +113,17 @@ def on_new_raw_camera_image(evt, **kwargs):
     doomed_tracker_ids = []
 
     # Loop through all outstanding trackers
-    for face_id in face_trackers.keys():
+    for tracker_id in face_trackers.keys():
         # Update the current tracker position
-        tracker_quality = face_trackers[face_id].update(frame)
+        tracker_quality = face_trackers[tracker_id].update(frame)
 
         # Doom the trackers with low quality tracks
         if tracker_quality < 7:
-            doomed_tracker_ids.append(face_id)
+            doomed_tracker_ids.append(tracker_id)
 
     # Prune the doomed trackers
-    for face_id in doomed_tracker_ids:
-        face_trackers.pop(face_id, None)
+    for tracker_id in doomed_tracker_ids:
+        face_trackers.pop(tracker_id, None)
 
     # Every five frames, run a detection
     if frame_counter % 5 == 0:
@@ -89,9 +151,9 @@ def on_new_raw_camera_image(evt, **kwargs):
             face_id_match = None
 
             # Loop through all outstanding trackers
-            for face_id in face_trackers.keys():
+            for tracker_id in face_trackers.keys():
                 # Get the current tracker position
-                tracker_box = face_trackers[face_id].get_position()
+                tracker_box = face_trackers[tracker_id].get_position()
 
                 # Tracker box coordinates
                 tb_l = int(tracker_box.left())  # left of tracker box
@@ -120,29 +182,50 @@ def on_new_raw_camera_image(evt, **kwargs):
                     continue
 
                 # If neither (a) or (b) was rejected, we have match. Hooray!
-                face_id_match = face_id
+                face_id_match = tracker_id
                 break
 
             # If no tracker match was found
             if face_id_match is None:
-                print('new face!')
+                print('Detected a new face! Recognizing...')
 
                 # Create a dlib correlation tracker
                 # These are supposedly pretty sturdy...
                 new_tracker = dlib.correlation_tracker()
 
+                # Get next available tracker ID
+                # FIXME: For now, we don't reuse them
+                tracker_id = next_tracker_id
+                next_tracker_id += 1
+
                 # Map the new tracker in
-                face_trackers[next_face_id] = new_tracker
-                next_face_id += 1
+                face_trackers[tracker_id] = new_tracker
+
+                # Add some padding to the face rectangle
+                fb_l -= 10
+                fb_t -= 20
+                fb_r += 10
+                fb_b += 20
 
                 # Start tracking the new face in full color
-                new_tracker.start_track(frame, dlib.rectangle(fb_l, fb_t, fb_r, fb_b))
+                new_tracker.start_track(frame, dlib.rectangle(fb_l - 10, fb_t - 10, fb_r + 10, fb_b + 10))
+
+                # Spin up a thread to recognize the person
+                # TODO: Maybe we should periodically try to re-recognize the person
+                thread = threading.Thread(target=recognize, args=(frame[fb_t:fb_b, fb_l:fb_r], tracker_id))
+                thread.start()
+
+                # FIXME: Diagnostic
+                cv2.imshow(f'Tracker {tracker_id}', frame[fb_t:fb_b, fb_l:fb_r])
+
+    # Upscale the frame before annotating it
+    frame = cv2.pyrUp(frame)
 
     # Loop through all outstanding trackers
     # This time we're just drawing our rectangles
-    for face_id in face_trackers.keys():
+    for tracker_id in face_trackers.keys():
         # Get the current tracker position
-        tracker_box = face_trackers[face_id].get_position()
+        tracker_box = face_trackers[tracker_id].get_position()
 
         # Tracker box coordinates
         tb_l = int(tracker_box.left())  # left of tracker box
@@ -151,11 +234,17 @@ def on_new_raw_camera_image(evt, **kwargs):
         tb_b = int(tracker_box.top() + tracker_box.height())  # bottom of tracker box
 
         # Draw the rectangle
-        cv2.rectangle(frame, (tb_l, tb_t), (tb_r, tb_b), (255, 0, 0))
+        cv2.rectangle(frame, (2 * tb_l, 2 * tb_t), (2 * tb_r, 2 * tb_b), (255, 0, 0))
 
-    # Upscale the frame for display
-    frame = cv2.pyrUp(frame)
-    frame = cv2.pyrUp(frame)
+        # If the track has a recognized identity
+        if tracker_id in face_tracker_identities.keys():
+            identity = face_tracker_identities[tracker_id]
+
+            # Print identity
+            cv2.putText(frame, f'ID {identity}', (2 * tb_l, 2 * tb_b), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 0), 2)
+        else:
+            # Print wait message
+            cv2.putText(frame, 'Recognizing...', (2 * tb_l, 2 * tb_b), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 0), 2)
 
     # Show the annotated frame
     # TODO: Remove this in production
