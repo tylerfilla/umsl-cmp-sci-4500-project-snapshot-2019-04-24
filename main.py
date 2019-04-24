@@ -208,7 +208,7 @@ def on_new_raw_camera_image(evt, **kwargs):
                 fb_b += 20
 
                 # Start tracking the new face in full color
-                new_tracker.start_track(frame, dlib.rectangle(fb_l - 10, fb_t - 10, fb_r + 10, fb_b + 10))
+                new_tracker.start_track(frame, dlib.rectangle(fb_l, fb_t, fb_r, fb_b))
 
                 # Spin up a thread to recognize the person
                 # TODO: Maybe we should periodically try to re-recognize the person
