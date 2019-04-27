@@ -6,9 +6,9 @@
 from abc import ABC, abstractmethod
 
 
-class Op(ABC):
+class AbstractClientOperation(ABC):
     """
-    An app operation.
+    A client operation.
     """
 
     @abstractmethod

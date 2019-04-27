@@ -8,10 +8,10 @@ import functools
 
 import cozmo
 
-from cozmonaut.op import Op
+from cozmonaut.component.client.operation import AbstractClientOperation
 
 
-class OpInteract(Op):
+class OperationInteract(AbstractClientOperation):
     """
     The interactive mode operation.
 
@@ -33,8 +33,8 @@ class OpInteract(Op):
         loop = asyncio.get_event_loop()
 
         # The serial numbers for Cozmos A and B
-        serial_a = self.args['serial_a']
-        serial_b = self.args['serial_b']
+        serial_a = self.args.get('serial_a', '')
+        serial_b = self.args.get('serial_b', '')
 
         print(f'Want Cozmo A to have serial number {serial_a}')
         print(f'Want Cozmo B to have serial number {serial_b}')
@@ -174,7 +174,7 @@ class OpInteract(Op):
         :param evt: The event instance
         """
 
-        print(f'got image from robot {robot.serial}: {evt.image}')
+        pass
 
     async def _battery_watchdog(self, robot: cozmo.robot.Robot):
         """
