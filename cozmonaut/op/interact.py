@@ -4,6 +4,7 @@
 #
 
 import asyncio
+import functools
 
 import cozmo
 
@@ -81,7 +82,13 @@ class OpInteract(Op):
             coroutines_for_cozmo.append(self._cozmo_a_main(robot_a))
         else:
             print('Unable to cast the role of Cozmo A')
-            return
+
+            # If the current mode requires Cozmo A to be assigned
+            if self.args['mode'] == 'only_a' or self.args['mode'] == 'a_and_b':
+                print('Refusing to continue because Cozmo A was not assigned')
+                return
+            else:
+                print('Continuing without Cozmo A...')
 
         # If we assigned a robot instance to play Cozmo B...
         if robot_b is not None:
@@ -92,7 +99,13 @@ class OpInteract(Op):
             coroutines_for_cozmo.append(self._cozmo_b_main(robot_b))
         else:
             print('Unable to cast the role of Cozmo B')
-            return
+
+            # If the current mode requires Cozmo B to be assigned
+            if self.args['mode'] == 'only_b' or self.args['mode'] == 'a_and_b':
+                print('Refusing to continue because Cozmo B was not assigned')
+                return
+            else:
+                print('Continuing without Cozmo B...')
 
         # This wraps all the coroutine objects above into one task object and schedules it
         asyncio.gather(
@@ -111,6 +124,14 @@ class OpInteract(Op):
         :param robot: The robot instance
         """
 
+        # Enable color imaging on this robot's camera
+        robot.camera.color_image_enabled = True
+        robot.camera.image_stream_enabled = True
+
+        # Register to receive camera frames from this robot
+        robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage,
+                                       functools.partial(self._on_new_raw_camera_image, robot))
+
         # Schedule a battery watchdog for this robot onto the loop
         asyncio.ensure_future(self._battery_watchdog(robot))
 
@@ -126,6 +147,14 @@ class OpInteract(Op):
         :param robot: The robot instance
         """
 
+        # Enable color imaging on this robot's camera
+        robot.camera.color_image_enabled = True
+        robot.camera.image_stream_enabled = True
+
+        # Register to receive camera frames from this robot
+        robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage,
+                                       functools.partial(self._on_new_raw_camera_image, robot))
+
         # Schedule a battery watchdog for this robot onto the loop
         asyncio.ensure_future(self._battery_watchdog(robot))
 
@@ -133,6 +162,19 @@ class OpInteract(Op):
         while True:
             # Yield control
             await asyncio.sleep(0)
+
+    def _on_new_raw_camera_image(self, robot: cozmo.robot.Robot, evt: cozmo.robot.camera.EvtNewRawCameraImage,
+                                 **kwargs):
+        """
+        Event handler for a robot's "new raw camera image" event.
+
+        This function is not asynchronous, so do not block on any I/O.
+
+        :param robot: The robot instance
+        :param evt: The event instance
+        """
+
+        print(f'got image from robot {robot.serial}: {evt.image}')
 
     async def _battery_watchdog(self, robot: cozmo.robot.Robot):
         """
