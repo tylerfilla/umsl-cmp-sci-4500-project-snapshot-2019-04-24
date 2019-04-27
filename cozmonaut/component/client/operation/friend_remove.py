@@ -17,5 +17,9 @@ class OperationFriendRemove(AbstractClientOperation):
         # Operation arguments
         self.args = args
 
-    def main(self):
+    def start(self):
         print('friend remove')
+
+    def stop(self):
+        # TODO: Wait for all DB operations to finish, etc.
+        pass

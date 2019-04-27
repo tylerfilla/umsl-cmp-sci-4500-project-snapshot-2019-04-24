@@ -12,20 +12,13 @@ class AbstractClientOperation(ABC):
     """
 
     @abstractmethod
-    def __init__(self, args: dict):
+    def start(self):
         """
-        Initialize the operation with arguments.
-
-        Each specific operation accepts different arguments, so see the
-        documentation of a specific operation for such information.
-
-        :param args: The operation arguments
+        Start the operation synchronously.
         """
-        pass
 
     @abstractmethod
-    def main(self):
+    def stop(self):
         """
-        The operation main function.
+        Stop the operation synchronously.
         """
-        pass

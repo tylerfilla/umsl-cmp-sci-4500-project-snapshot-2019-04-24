@@ -16,11 +16,9 @@ class AbstractComponent(ABC):
         """
         Start the component.
         """
-        pass
 
     @abstractmethod
     def stop(self):
         """
         Stop the component.
         """
-        pass

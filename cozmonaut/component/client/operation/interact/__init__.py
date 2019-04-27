@@ -4,11 +4,12 @@
 #
 
 import asyncio
-import functools
+import threading
 
 import cozmo
 
 from cozmonaut.component.client.operation import AbstractClientOperation
+from cozmonaut.component.client.operation.interact.face_tracker import FaceTracker
 
 
 class OperationInteract(AbstractClientOperation):
@@ -23,21 +24,37 @@ class OperationInteract(AbstractClientOperation):
     """
 
     def __init__(self, args: dict):
-        super().__init__(args)
+        self._args = args
 
-        # Operation arguments
-        self.args = args
+        self._face_tracker_a = FaceTracker()
+        self._face_tracker_b = FaceTracker()
+        self._should_stop = False
+        self._stopping = False
+        self._thread = None
+
+    def start(self):
+        # Start operation thread
+        self._thread = threading.Thread(target=self.main)
+        self._thread.start()
+
+    def stop(self):
+        # Set the kill switch
+        self._should_stop = True
+
+        # Wait for the thread to die
+        # This also waits for the Cozmos to park, potentially
+        self._thread.join()
 
     def main(self):
-        # Get the event loop on this thread
-        loop = asyncio.get_event_loop()
+        # Create an event loop on this thread
+        loop = asyncio.new_event_loop()
 
         # The serial numbers for Cozmos A and B
-        serial_a = self.args.get('serial_a', '')
-        serial_b = self.args.get('serial_b', '')
+        serial_a = self._args.get('serial_a')
+        serial_b = self._args.get('serial_b')
 
-        print(f'Want Cozmo A to have serial number {serial_a}')
-        print(f'Want Cozmo B to have serial number {serial_b}')
+        print(f'Want Cozmo A to have serial number {serial_a or "(unknown)"}')
+        print(f'Want Cozmo B to have serial number {serial_b or "(unknown)"}')
 
         # Live robot instances for Cozmos A and B
         robot_a = None
@@ -84,7 +101,7 @@ class OperationInteract(AbstractClientOperation):
             print('Unable to cast the role of Cozmo A')
 
             # If the current mode requires Cozmo A to be assigned
-            if self.args['mode'] == 'only_a' or self.args['mode'] == 'a_and_b':
+            if self._args['mode'] == 'only_a' or self._args['mode'] == 'a_and_b':
                 print('Refusing to continue because Cozmo A was not assigned')
                 return
             else:
@@ -101,21 +118,50 @@ class OperationInteract(AbstractClientOperation):
             print('Unable to cast the role of Cozmo B')
 
             # If the current mode requires Cozmo B to be assigned
-            if self.args['mode'] == 'only_b' or self.args['mode'] == 'a_and_b':
+            if self._args['mode'] == 'only_b' or self._args['mode'] == 'a_and_b':
                 print('Refusing to continue because Cozmo B was not assigned')
                 return
             else:
                 print('Continuing without Cozmo B...')
 
-        # This wraps all the coroutine objects above into one task object and schedules it
+        # This wraps everything into one task object and schedules it on the loop
         asyncio.gather(
+            # The operation watchdog (tells us when to call it quits)
+            self._watchdog(),
+
             # Expand the main coroutines list into arguments
             *coroutines_for_cozmo,
+
+            # Use the new loop
             loop=loop,
         )
 
-        # Run the loop forever
+        # Run the loop forever on this thread
         loop.run_forever()
+
+    async def _watchdog(self):
+        """
+        The operation watchdog.
+
+        This looks out for the "kill switch" set by another thread. If it is
+        set, we safe the robots and clean up gracefully.
+        """
+
+        while not self._stopping:
+            # If the kill switch is set but we're not stopping yet
+            if self._should_stop and not self._stopping:
+                # We're stopping now
+                self._stopping = True
+
+                # TODO: We're shutting down (maybe Ctrl-C), so drive the Cozmos to safety
+                print('Interaction shutting down...')
+
+                # Politely ask the loop to stop
+                loop = asyncio.get_event_loop()
+                loop.call_soon(loop.stop)
+
+            # Yield control
+            await asyncio.sleep(0)
 
     async def _cozmo_a_main(self, robot: cozmo.robot.Robot):
         """
@@ -129,16 +175,27 @@ class OperationInteract(AbstractClientOperation):
         robot.camera.image_stream_enabled = True
 
         # Register to receive camera frames from this robot
-        robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage,
-                                       functools.partial(self._on_new_raw_camera_image, robot))
+        robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage, self._cozmo_a_on_new_raw_camera_image)
 
-        # Schedule a battery watchdog for this robot onto the loop
-        asyncio.ensure_future(self._battery_watchdog(robot))
+        # Schedule a battery watcher for this robot onto the loop
+        asyncio.ensure_future(self._battery_watcher(robot))
 
         # TODO: Add control stuffs for robot A
-        while True:
+        while not self._stopping:
             # Yield control
             await asyncio.sleep(0)
+
+    def _cozmo_a_on_new_raw_camera_image(self, evt: cozmo.robot.camera.EvtNewRawCameraImage, **kwargs):
+        """
+        Event handler for Cozmo A's raw camera image event.
+
+        This function is not asynchronous, so go fast!
+
+        :param evt: The event instance
+        """
+
+        # Send the image off to face tracker A
+        self._face_tracker_a.update(evt.image)
 
     async def _cozmo_b_main(self, robot: cozmo.robot.Robot):
         """
@@ -152,33 +209,31 @@ class OperationInteract(AbstractClientOperation):
         robot.camera.image_stream_enabled = True
 
         # Register to receive camera frames from this robot
-        robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage,
-                                       functools.partial(self._on_new_raw_camera_image, robot))
+        robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage, self._cozmo_a_on_new_raw_camera_image)
 
-        # Schedule a battery watchdog for this robot onto the loop
-        asyncio.ensure_future(self._battery_watchdog(robot))
+        # Schedule a battery watcher for this robot onto the loop
+        asyncio.ensure_future(self._battery_watcher(robot))
 
         # TODO: Add control stuffs for robot B
-        while True:
+        while not self._stopping:
             # Yield control
             await asyncio.sleep(0)
 
-    def _on_new_raw_camera_image(self, robot: cozmo.robot.Robot, evt: cozmo.robot.camera.EvtNewRawCameraImage,
-                                 **kwargs):
+    def _cozmo_b_on_new_raw_camera_image(self, evt: cozmo.robot.camera.EvtNewRawCameraImage, **kwargs):
         """
-        Event handler for a robot's "new raw camera image" event.
+        Event handler for Cozmo B's raw camera image event.
 
-        This function is not asynchronous, so do not block on any I/O.
+        This function is not asynchronous, so go fast!
 
-        :param robot: The robot instance
         :param evt: The event instance
         """
 
-        pass
+        # Send the image off to face tracker B
+        self._face_tracker_b.update(evt.image)
 
-    async def _battery_watchdog(self, robot: cozmo.robot.Robot):
+    async def _battery_watcher(self, robot: cozmo.robot.Robot):
         """
-        A battery watchdog for either Cozmo A or B.
+        A battery watcher for either Cozmo A or B.
 
         This is responsible for watching the battery potential on a robot object
         instance
@@ -186,7 +241,7 @@ class OperationInteract(AbstractClientOperation):
         :param robot: The robot instance
         """
 
-        while True:
+        while not self._stopping:
             # If battery potential is below the recommended "low" level
             if robot.battery_voltage < 3.5:
                 # TODO: Drive the robot back to charge and swap the next one in

@@ -17,5 +17,9 @@ class OperationFriendList(AbstractClientOperation):
         # Operation arguments
         self.args = args
 
-    def main(self):
+    def start(self):
         print('friend list')
+
+    def stop(self):
+        # TODO: Wait for all DB operations to finish, etc.
+        pass

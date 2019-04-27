@@ -6,6 +6,7 @@
 from enum import Enum
 
 from cozmonaut.component import AbstractComponent
+from cozmonaut.component.client.operation import AbstractClientOperation
 from cozmonaut.component.client.operation.friend_list import OperationFriendList
 from cozmonaut.component.client.operation.friend_remove import OperationFriendRemove
 from cozmonaut.component.client.operation.interact import OperationInteract
@@ -34,20 +35,23 @@ class ComponentClient(AbstractComponent):
     """
 
     def __init__(self, op_name: ClientOperation, op_args: dict):
-        self.op_name = op_name
-        self.op_args = op_args
+        self._op_name = op_name
+        self._op_args = op_args
+
+        self._op = None
 
     def start(self):
         # Create the relevant operation instance
-        op = None
-        if self.op_name == ClientOperation.friend_list:
-            op = OperationFriendList(self.op_args)
-        elif self.op_name == ClientOperation.friend_remove:
-            op = OperationFriendRemove(self.op_args)
-        elif self.op_name == ClientOperation.interact:
-            op = OperationInteract(self.op_args)
+        if self._op_name == ClientOperation.friend_list:
+            self._op = OperationFriendList(self._op_args)
+        elif self._op_name == ClientOperation.friend_remove:
+            self._op = OperationFriendRemove(self._op_args)
+        elif self._op_name == ClientOperation.interact:
+            self._op = OperationInteract(self._op_args)
 
-        op.main()
+        # Start the operation
+        self._op.start()
 
     def stop(self):
-        pass
+        # Stop the operation
+        self._op.stop()
