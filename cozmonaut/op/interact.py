@@ -94,16 +94,15 @@ class OpInteract(Op):
             print('Unable to cast the role of Cozmo B')
             return
 
-        # I think this is an aptly-named variable
         # This wraps all the coroutine objects above into one task object and schedules it
-        everything = asyncio.gather(
+        asyncio.gather(
             # Expand the main coroutines list into arguments
             *coroutines_for_cozmo,
             loop=loop,
         )
 
-        # Run everything on the loop
-        loop.run_until_complete(everything)
+        # Run the loop forever
+        loop.run_forever()
 
     async def _cozmo_a_main(self, robot: cozmo.robot.Robot):
         """
@@ -111,7 +110,14 @@ class OpInteract(Op):
 
         :param robot: The robot instance
         """
-        pass
+
+        # Schedule a battery watchdog for this robot onto the loop
+        asyncio.ensure_future(self._battery_watchdog(robot))
+
+        # TODO: Add control stuffs for robot A
+        while True:
+            # Yield control
+            await asyncio.sleep(0)
 
     async def _cozmo_b_main(self, robot: cozmo.robot.Robot):
         """
@@ -119,7 +125,34 @@ class OpInteract(Op):
 
         :param robot: The robot instance
         """
-        pass
+
+        # Schedule a battery watchdog for this robot onto the loop
+        asyncio.ensure_future(self._battery_watchdog(robot))
+
+        # TODO: Add control stuffs for robot B
+        while True:
+            # Yield control
+            await asyncio.sleep(0)
+
+    async def _battery_watchdog(self, robot: cozmo.robot.Robot):
+        """
+        A battery watchdog for either Cozmo A or B.
+
+        This is responsible for watching the battery potential on a robot object
+        instance
+
+        :param robot: The robot instance
+        """
+
+        while True:
+            # If battery potential is below the recommended "low" level
+            if robot.battery_voltage < 3.5:
+                # TODO: Drive the robot back to charge and swap the next one in
+                print('THE BATTERY IS LOW')
+                break
+
+            # Yield control
+            await asyncio.sleep(0)
 
 
 # Do not leave the charger until we say it's okay
