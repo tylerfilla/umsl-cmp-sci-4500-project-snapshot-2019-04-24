@@ -26,6 +26,8 @@ class OperationInteract(AbstractClientOperation):
     def __init__(self, args: dict):
         self._args = args
 
+        self._robot_a = None
+        self._robot_b = None
         self._face_tracker_a = FaceTracker()
         self._face_tracker_b = FaceTracker()
         self._should_stop = False
@@ -56,10 +58,6 @@ class OperationInteract(AbstractClientOperation):
         print(f'Want Cozmo A to have serial number {serial_a or "(unknown)"}')
         print(f'Want Cozmo B to have serial number {serial_b or "(unknown)"}')
 
-        # Live robot instances for Cozmos A and B
-        robot_a = None
-        robot_b = None
-
         while True:
             # Connect to next available Cozmo
             conn = None
@@ -76,12 +74,12 @@ class OperationInteract(AbstractClientOperation):
 
             # Keep robot instances with desired serial numbers
             if robot.serial == serial_a:
-                robot_a = robot
+                self._robot_a = robot
             if robot.serial == serial_b:
-                robot_b = robot
+                self._robot_b = robot
 
             # If both are assigned, we're good!
-            if robot_a is not None and robot_b is not None:
+            if self._robot_a is not None and self._robot_b is not None:
                 print('Both Cozmo A and Cozmo B assigned')
                 break
 
@@ -91,12 +89,12 @@ class OperationInteract(AbstractClientOperation):
         coroutines_for_cozmo = []
 
         # If we assigned a robot instance to play Cozmo A...
-        if robot_a is not None:
-            print(f'The role of Cozmo A is being played by robot {robot_a.serial}')
+        if self._robot_a is not None:
+            print(f'The role of Cozmo A is being played by robot {self._robot_a.serial}')
 
             # Obtain a coroutine for Cozmo A main function
             # Add the coroutine to the above coroutine list
-            coroutines_for_cozmo.append(self._cozmo_a_main(robot_a))
+            coroutines_for_cozmo.append(self._cozmo_a_main(self._robot_a))
         else:
             print('Unable to cast the role of Cozmo A')
 
@@ -108,12 +106,12 @@ class OperationInteract(AbstractClientOperation):
                 print('Continuing without Cozmo A...')
 
         # If we assigned a robot instance to play Cozmo B...
-        if robot_b is not None:
-            print(f'The role of Cozmo B is being played by robot {robot_b.serial}')
+        if self._robot_b is not None:
+            print(f'The role of Cozmo B is being played by robot {self._robot_b.serial}')
 
             # Obtain a coroutine for Cozmo B main function
             # Add the coroutine to the above coroutine list
-            coroutines_for_cozmo.append(self._cozmo_b_main(robot_b))
+            coroutines_for_cozmo.append(self._cozmo_b_main(self._robot_b))
         else:
             print('Unable to cast the role of Cozmo B')
 
@@ -226,6 +224,40 @@ class OperationInteract(AbstractClientOperation):
         while not self._stopping:
             # Yield control
             await asyncio.sleep(0)
+
+    # TODO: THE ACTIVE AND IDLE FUNCTIONS BELOW ARE NOT BEING CALLED (YET!)
+
+    async def _cozmo_common_active(self, robot: cozmo.robot.Robot):
+        """
+        The active subroutine for a Cozmo robot.
+
+        This is where the waypoint loop code should go.
+
+        :param robot: The robot instance
+        :return:
+        """
+
+        # TODO: Drive out to the waypoint
+
+        # TODO: Wait for a variable to get set to True
+
+        # TODO: Drive back to charger
+
+        # TODO: Set a global variable saying "back to charger!"
+
+    async def _cozmo_common_idle(self, robot: cozmo.robot.Robot):
+        """
+        The idle subroutine for a Cozmo robot.
+
+        This is where the "on charger" code should go
+
+        :param robot: The robot instance
+        :return:
+        """
+
+        # TODO: We just need to wait here, really
+
+        # TODO: This is code that needs to run while on the charger
 
     def _cozmo_b_on_new_raw_camera_image(self, evt: cozmo.robot.camera.EvtNewRawCameraImage, **kwargs):
         """
