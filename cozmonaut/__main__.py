@@ -23,7 +23,7 @@ if __name__ == '__main__':
 
     # Wait to simulate running other stuff
     # TODO: This is where we can run the text-to-speech input (ncurses?), install ^C handler, etc.
-    time.sleep(5)
+    time.sleep(60)
 
     # Stop client component
     comp.stop()

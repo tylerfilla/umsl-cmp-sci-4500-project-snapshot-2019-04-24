@@ -136,8 +136,16 @@ class OperationInteract(AbstractClientOperation):
             loop=loop,
         )
 
-        # Run the loop forever on this thread
+        # Start the face trackers
+        self._face_tracker_a.start()
+        self._face_tracker_b.start()
+
+        # Run the loop on this thread until it stops itself
         loop.run_forever()
+
+        # Stop the face trackers
+        self._face_tracker_a.stop()
+        self._face_tracker_b.stop()
 
     async def _watchdog(self):
         """
@@ -209,7 +217,7 @@ class OperationInteract(AbstractClientOperation):
         robot.camera.image_stream_enabled = True
 
         # Register to receive camera frames from this robot
-        robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage, self._cozmo_a_on_new_raw_camera_image)
+        robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage, self._cozmo_b_on_new_raw_camera_image)
 
         # Schedule a battery watcher for this robot onto the loop
         asyncio.ensure_future(self._battery_watcher(robot))
