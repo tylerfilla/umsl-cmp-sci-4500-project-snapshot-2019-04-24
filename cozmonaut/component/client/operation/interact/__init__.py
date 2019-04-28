@@ -5,11 +5,23 @@
 
 import asyncio
 import threading
+from enum import Enum
 
 import cozmo
 
 from cozmonaut.component.client.operation import AbstractClientOperation
 from cozmonaut.component.client.operation.interact.face_tracker import FaceTracker
+
+
+class OperationInteractMode(Enum):
+    """
+    A mode for interaction with Cozmo(s).
+    """
+
+    neither = 0  # Do not run any actual Cozmos
+    both = 1  # Run both Cozmos interactively
+    only_a = 2  # Only run Cozmo A interactively
+    only_b = 3  # Only run Cozmo B interactively
 
 
 class OperationInteract(AbstractClientOperation):
@@ -20,19 +32,31 @@ class OperationInteract(AbstractClientOperation):
     of meeting and greeting people. Support is hardcoded for two Cozmo robots,
     and they are assigned the roles of Cozmo A and Cozmo B.
 
-    TODO: Add information about how the interact
+    TODO: Add information about how they interact with passersby and themselves
     """
 
     def __init__(self, args: dict):
         self._args = args
 
-        self._robot_a = None
-        self._robot_b = None
-        self._face_tracker_a = FaceTracker()
-        self._face_tracker_b = FaceTracker()
+        # Control variables for the component
+        # This is at the level of the command-line app hosting us
         self._should_stop = False
         self._stopping = False
         self._thread = None
+
+        # Control variables for the robots
+        # This is at the level of interacting with passersby
+        self._swap = False  # TODO: This is the "global" flag from the whiteboard
+        self._convo = False  # TODO: Conversation flag
+        self._cd = 0  # TODO: Conversation identifier (better name?)
+
+        # The live robot instances
+        self._robot_a = None
+        self._robot_b = None
+
+        # The face trackers for the respective robots
+        self._face_tracker_a = FaceTracker()
+        self._face_tracker_b = FaceTracker()
 
     def start(self):
         # Start operation thread
@@ -99,7 +123,8 @@ class OperationInteract(AbstractClientOperation):
             print('Unable to cast the role of Cozmo A')
 
             # If the current mode requires Cozmo A to be assigned
-            if self._args['mode'] == 'only_a' or self._args['mode'] == 'a_and_b':
+            # The two modes that require this are "only_a" and "both"
+            if self._args['mode'] == OperationInteractMode.only_a or self._args['mode'] == OperationInteractMode.both:
                 print('Refusing to continue because Cozmo A was not assigned')
                 return
             else:
@@ -116,7 +141,8 @@ class OperationInteract(AbstractClientOperation):
             print('Unable to cast the role of Cozmo B')
 
             # If the current mode requires Cozmo B to be assigned
-            if self._args['mode'] == 'only_b' or self._args['mode'] == 'a_and_b':
+            # The two modes that require this are "only_b" and "both"
+            if self._args['mode'] == OperationInteractMode.only_b or self._args['mode'] == OperationInteractMode.both:
                 print('Refusing to continue because Cozmo B was not assigned')
                 return
             else:
@@ -159,14 +185,19 @@ class OperationInteract(AbstractClientOperation):
                 # We're stopping now
                 self._stopping = True
 
-                # TODO: We're shutting down (maybe Ctrl-C), so drive the Cozmos to safety
-                print('Interaction shutting down...')
+                while True:
+                    # TODO: We need to wait for both Cozmos to return to their chargers
+                    # TODO: Either add another global boolean or upgrade self._swap to a three-state int (where zero means none active, etc.)
+                    print('Not enough information (see _watchdog in cozmonaut/component/client/operation/__init__.py ...)')
+
+                    # Yield control to other coroutines
+                    await asyncio.sleep(0)
 
                 # Politely ask the loop to stop
                 loop = asyncio.get_event_loop()
                 loop.call_soon(loop.stop)
 
-            # Yield control
+            # Yield control to other coroutines
             await asyncio.sleep(0)
 
     async def _cozmo_a_main(self, robot: cozmo.robot.Robot):
@@ -176,20 +207,25 @@ class OperationInteract(AbstractClientOperation):
         :param robot: The robot instance
         """
 
-        # Enable color imaging on this robot's camera
-        robot.camera.color_image_enabled = True
-        robot.camera.image_stream_enabled = True
-
         # Register to receive camera frames from this robot
         robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage, self._cozmo_a_on_new_raw_camera_image)
 
         # Schedule a battery watcher for this robot onto the loop
-        asyncio.ensure_future(self._battery_watcher(robot))
+        coro_batt = asyncio.ensure_future(self._battery_watcher(robot))
 
-        # TODO: Add control stuffs for robot A
+        # Schedule a face watcher for this robot onto the loop
+        coro_face = asyncio.ensure_future(self._face_watcher(robot))
+
+        # Loop for Cozmo A
         while not self._stopping:
-            # Yield control
+            # Yield control to other coroutines
             await asyncio.sleep(0)
+
+        # Wait for face coroutine to stop
+        await coro_face
+
+        # Wait for battery coroutine to stop
+        await coro_batt
 
     def _cozmo_a_on_new_raw_camera_image(self, evt: cozmo.robot.camera.EvtNewRawCameraImage, **kwargs):
         """
@@ -210,22 +246,27 @@ class OperationInteract(AbstractClientOperation):
         :param robot: The robot instance
         """
 
-        # Enable color imaging on this robot's camera
-        robot.camera.color_image_enabled = True
-        robot.camera.image_stream_enabled = True
-
         # Register to receive camera frames from this robot
         robot.camera.add_event_handler(cozmo.robot.camera.EvtNewRawCameraImage, self._cozmo_b_on_new_raw_camera_image)
 
         # Schedule a battery watcher for this robot onto the loop
-        asyncio.ensure_future(self._battery_watcher(robot))
+        coro_batt = asyncio.ensure_future(self._battery_watcher(robot))
 
-        # TODO: Add control stuffs for robot B
+        # Schedule a face watcher for this robot onto the loop
+        coro_face = asyncio.ensure_future(self._face_watcher(robot))
+
+        # Loop for Cozmo B
         while not self._stopping:
-            # Yield control
+            # Yield control to other coroutines
             await asyncio.sleep(0)
 
-    # TODO: THE ACTIVE AND IDLE FUNCTIONS BELOW ARE NOT BEING CALLED (YET!)
+        # Wait for face coroutine to stop
+        await coro_face
+
+        # Wait for battery coroutine to stop
+        await coro_batt
+
+    # TODO: THE ACTIVE AND IDLE FUNCTIONS BELOW ARE NOT BEING CALLED YET
 
     async def _cozmo_common_active(self, robot: cozmo.robot.Robot):
         """
@@ -234,30 +275,28 @@ class OperationInteract(AbstractClientOperation):
         This is where the waypoint loop code should go.
 
         :param robot: The robot instance
-        :return:
         """
 
-        # TODO: Drive out to the waypoint
+        while not self._stopping:
+            # TODO: Waypoint code
 
-        # TODO: Wait for a variable to get set to True
-
-        # TODO: Drive back to charger
-
-        # TODO: Set a global variable saying "back to charger!"
+            # Yield control to other coroutines
+            await asyncio.sleep(0)
 
     async def _cozmo_common_idle(self, robot: cozmo.robot.Robot):
         """
         The idle subroutine for a Cozmo robot.
 
-        This is where the "on charger" code should go
+        This is where the idling-on-charger code should go.
 
         :param robot: The robot instance
-        :return:
         """
 
-        # TODO: We just need to wait here, really
+        while not self._stopping:
+            # TODO: This is code that needs to run while on the charger
 
-        # TODO: This is code that needs to run while on the charger
+            # Yield control to other coroutines
+            await asyncio.sleep(0)
 
     def _cozmo_b_on_new_raw_camera_image(self, evt: cozmo.robot.camera.EvtNewRawCameraImage, **kwargs):
         """
@@ -273,10 +312,10 @@ class OperationInteract(AbstractClientOperation):
 
     async def _battery_watcher(self, robot: cozmo.robot.Robot):
         """
-        A battery watcher for either Cozmo A or B.
+        A battery watcher for a Cozmo robot.
 
         This is responsible for watching the battery potential on a robot object
-        instance
+        and returning the robot to the charger.
 
         :param robot: The robot instance
         """
@@ -288,7 +327,25 @@ class OperationInteract(AbstractClientOperation):
                 print('THE BATTERY IS LOW')
                 break
 
-            # Yield control
+            # Yield control to other coroutines
+            await asyncio.sleep(0)
+
+    async def _face_watcher(self, robot: cozmo.robot.Robot):
+        """
+        A face watcher for a Cozmo robot.
+
+        This is responsible for watching for faces
+
+        :param robot:
+        :return:
+        """
+
+        # Enable color imaging on this robot's camera
+        robot.camera.color_image_enabled = True
+        robot.camera.image_stream_enabled = True
+
+        while not self._stopping:
+            # Yield control to other coroutines
             await asyncio.sleep(0)
 
 
