@@ -18,10 +18,9 @@ class OperationInteractMode(Enum):
     A mode for interaction with Cozmo(s).
     """
 
-    neither = 0  # Do not run any actual Cozmos
-    both = 1  # Run both Cozmos interactively
-    only_a = 2  # Only run Cozmo A interactively
-    only_b = 3  # Only run Cozmo B interactively
+    both = 0  # Run both Cozmos interactively
+    only_a = 1  # Only run Cozmo A interactively
+    only_b = 2  # Only run Cozmo B interactively
 
 
 class OperationInteract(AbstractClientOperation):
@@ -75,6 +74,9 @@ class OperationInteract(AbstractClientOperation):
         # Create an event loop on this thread
         loop = asyncio.new_event_loop()
 
+        # The mode of interaction
+        mode = self._args.get('mode')
+
         # The serial numbers for Cozmos A and B
         serial_a = self._args.get('serial_a')
         serial_b = self._args.get('serial_b')
@@ -84,7 +86,6 @@ class OperationInteract(AbstractClientOperation):
 
         while True:
             # Connect to next available Cozmo
-            conn = None
             try:
                 conn = cozmo.connect_on_loop(loop)
             except cozmo.exceptions.NoDevicesFound:
@@ -124,7 +125,7 @@ class OperationInteract(AbstractClientOperation):
 
             # If the current mode requires Cozmo A to be assigned
             # The two modes that require this are "only_a" and "both"
-            if self._args['mode'] == OperationInteractMode.only_a or self._args['mode'] == OperationInteractMode.both:
+            if mode == OperationInteractMode.only_a or mode == OperationInteractMode.both:
                 print('Refusing to continue because Cozmo A was not assigned')
                 return
             else:
@@ -142,7 +143,7 @@ class OperationInteract(AbstractClientOperation):
 
             # If the current mode requires Cozmo B to be assigned
             # The two modes that require this are "only_b" and "both"
-            if self._args['mode'] == OperationInteractMode.only_b or self._args['mode'] == OperationInteractMode.both:
+            if mode == OperationInteractMode.only_b or mode == OperationInteractMode.both:
                 print('Refusing to continue because Cozmo B was not assigned')
                 return
             else:
@@ -188,7 +189,8 @@ class OperationInteract(AbstractClientOperation):
                 while True:
                     # TODO: We need to wait for both Cozmos to return to their chargers
                     # TODO: Either add another global boolean or upgrade self._swap to a three-state int (where zero means none active, etc.)
-                    print('Not enough information (see _watchdog in cozmonaut/component/client/operation/__init__.py ...)')
+                    print(
+                        'Drive to charger not implemented yet (_watchdog in cozmonaut/component/client/operation/__init__.py ...)')
 
                     # Yield control to other coroutines
                     await asyncio.sleep(0)
@@ -337,7 +339,6 @@ class OperationInteract(AbstractClientOperation):
         This is responsible for watching for faces
 
         :param robot:
-        :return:
         """
 
         # Enable color imaging on this robot's camera

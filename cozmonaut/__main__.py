@@ -11,7 +11,7 @@ from cozmonaut.component.client.operation.interact import OperationInteractMode
 if __name__ == '__main__':
     # Arguments for Cozmo interactions
     args = {
-        'mode': OperationInteractMode.neither,
+        'mode': OperationInteractMode.both,
         'serial_a': '45a18821',
         'serial_b': None,  # No second Cozmo yet
     }
