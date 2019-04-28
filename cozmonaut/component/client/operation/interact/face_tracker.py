@@ -4,6 +4,7 @@
 #
 
 import time
+from concurrent.futures import Future
 from concurrent.futures.thread import ThreadPoolExecutor
 from threading import Thread, Lock
 from typing import List, Tuple
@@ -111,8 +112,6 @@ class FaceTracker:
     """
 
     def __init__(self):
-        self._preview_window = dlib.image_window()  # FIXME: Don't want this in production
-
         # The detection thread
         # We only need one of these, as each detection operation finds all faces in a frame
         # It would make no sense to parallelize detection across multiple frames simultaneously
@@ -136,6 +135,10 @@ class FaceTracker:
         self._pending_detection = None
         self._pending_detection_flag = False
         self._pending_detection_lock = Lock()
+
+        # The list of "next track" futures
+        self._next_track_futures = []
+        self._next_track_futures_lock = Lock()
 
     def start(self):
         """
@@ -191,7 +194,7 @@ class FaceTracker:
             quality = self._trackers[tracker_id].update(image_np)
 
             # Doom the trackers with low quality tracks
-            if quality < 7:
+            if quality < 7:  # TODO: Allow user to set this
                 doomed_tracker_ids.append(tracker_id)
 
         # Prune the doomed trackers
@@ -212,8 +215,25 @@ class FaceTracker:
         # Release pending detection frame lock
         self._pending_detection_lock.release()
 
-        # Update preview window FIXME
-        self._preview_window.set_image(image_np)
+    def next_track(self):
+        """
+        Obtain a future on the next initiated face track. This does not notify
+        of any preexisting tracks.
+
+        :return: A future for the next DetectedFace object
+        """
+
+        # Create a future for the detection (they say we're not supposed to call this)
+        # We will keep one copy and send another to the caller
+        # Later on, after we track a new face, we'll complete the future
+        future = Future()
+
+        # Lock, append the future to, and unlock the next track futures list
+        self._next_track_futures_lock.acquire()
+        self._next_track_futures.append(future)
+        self._next_track_futures_lock.release()
+
+        return future
 
     def _thread_detection_main(self):
         """
@@ -331,7 +351,7 @@ class FaceTracker:
                         print(f'started tracker {tracker_id}')
 
                         # Add some padding to the face rectangle
-                        # TODO: Make this configurable
+                        # TODO: Make this slop configurable
                         track_left = face.left() - 10
                         track_top = face.top() - 20
                         track_right = face.right() + 10
@@ -340,6 +360,17 @@ class FaceTracker:
                         # Start tracking the new face in full color
                         new_tracker.start_track(frame_np,
                                                 dlib.rectangle(track_left, track_top, track_right, track_bottom))
+
+                        # Info about the detected face
+                        detected = DetectedFace()
+                        detected.coords = (track_left, track_top, track_right, track_bottom)
+
+                        # Complete all the next track futures
+                        self._next_track_futures_lock.acquire()
+                        for future in self._next_track_futures:
+                            future.set_result(detected)
+                        self._next_track_futures.clear()
+                        self._next_track_futures_lock.release()
 
                     # Release lock on trackers
                     self._trackers_lock.release()
