@@ -6,7 +6,7 @@
 import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from threading import Thread, Lock
-from typing import List
+from typing import List, Tuple
 
 import PIL.Image
 import cv2
@@ -24,6 +24,85 @@ _predictor = dlib.shape_predictor(_predictor_serialized_file_name)
 # The face recognition model
 _model_file_serialized_file_name = resource_filename(__name__, "data/dlib_face_recognition_resnet_model_v1.dat")
 _model = dlib.face_recognition_model_v1(_model_file_serialized_file_name)
+
+
+class DetectedFace:
+    """
+    Info about a face that has been detected.
+    """
+
+    def __init__(self):
+        self._coords: Tuple[int, int, int, int] = (0, 0, 0, 0)
+
+    @property
+    def coords(self) -> Tuple[int, int, int, int]:
+        """
+        :return: The face coordinates (left, top, right, bottom)
+        """
+        return self._coords
+
+    @coords.setter
+    def coords(self, value: Tuple[int, int, int, int]):
+        """
+        :param value: The face coordinates (left, top, right, bottom)
+        """
+        self._coords = value
+
+
+class RecognizedFace(DetectedFace):
+    """
+    Info about a face that has been recognized.
+
+    All recognized faces are detected faces.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._fid: int = 0
+        self._ident: Tuple[int, ...] = ()
+        self._ident_base64: str = ""
+
+    @property
+    def fid(self) -> int:
+        """
+        :return: The face ID
+        """
+        return self._fid
+
+    @fid.setter
+    def fid(self, fid: int):
+        """
+        :param fid: The face ID
+        """
+        self._fid = fid
+
+    @property
+    def ident(self) -> Tuple[int, ...]:
+        """
+        :return: The face identity (128-dimensional vector embedding)
+        """
+        return self._ident
+
+    @ident.setter
+    def ident(self, value: Tuple[int, ...]):
+        """
+        :param value: The face identity (128-dimensional vector embedding)
+        """
+        self._ident = value
+
+    @property
+    def ident_base64(self) -> str:
+        """
+        :return: The face identity as a Base64 string
+        """
+        return self._ident_base64
+
+    @ident_base64.setter
+    def ident_base64(self, value: str):
+        """
+        :param value: The face identity as a Base64 string
+        """
+        self._ident_base64 = value
 
 
 class FaceTracker:
