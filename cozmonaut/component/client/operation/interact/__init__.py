@@ -5,7 +5,11 @@
 
 import asyncio
 import threading
+import sys
 from enum import Enum
+
+sys.path.insert(0, '/python/chargerReturn.py/')
+import chargerReturn
 
 import cozmo
 
@@ -325,8 +329,7 @@ class OperationInteract(AbstractClientOperation):
                 # We're stopping now
                 self._stopping = True
 
-                # TODO: We need to drive both Cozmos back to their chargers, as the Ctrl+C or equivalent happened
-                print('DRIVING TO CHARGER NOT IMPLEMENTED YET')
+                chargerReturn.cozmo_program(self)
 
                 # Politely ask the loop to stop
                 loop = asyncio.get_event_loop()
@@ -462,9 +465,7 @@ class OperationInteract(AbstractClientOperation):
         while not self._stopping:
             # If battery potential is below the recommended "low" level
             if robot.battery_voltage < 3.5:
-                # TODO: Drive the robot back to charge and swap the next one in
-                print('DRIVING TO CHARGER NOT YET IMPLEMENTED')
-                print('SWAPPING THE COZMOS NOT YET IMPLEMENTED')
+                chargerReturn.cozmo_program(self)
                 break
 
             # Yield control to other coroutines
