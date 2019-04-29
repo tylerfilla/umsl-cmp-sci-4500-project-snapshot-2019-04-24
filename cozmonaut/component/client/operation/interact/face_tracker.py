@@ -7,7 +7,7 @@ import time
 from concurrent.futures import Future
 from concurrent.futures.thread import ThreadPoolExecutor
 from threading import Thread, Lock
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import PIL.Image
 import cv2
@@ -29,11 +29,26 @@ _model = dlib.face_recognition_model_v1(_model_file_serialized_file_name)
 
 class DetectedFace:
     """
-    Info about a face that has been detected.
+    Info about a face that has been detected and tracked.
     """
 
     def __init__(self):
+        self._index: int = 0
         self._coords: Tuple[int, int, int, int] = (0, 0, 0, 0)
+
+    @property
+    def index(self) -> int:
+        """
+        :return: The track index
+        """
+        return self._index
+
+    @index.setter
+    def index(self, value):
+        """
+        :param value: The track index
+        """
+        self._index = value
 
     @property
     def coords(self) -> Tuple[int, int, int, int]:
@@ -61,7 +76,6 @@ class RecognizedFace(DetectedFace):
         super().__init__()
         self._fid: int = 0
         self._ident: Tuple[int, ...] = ()
-        self._ident_base64: str = ""
 
     @property
     def fid(self) -> int:
@@ -91,20 +105,6 @@ class RecognizedFace(DetectedFace):
         """
         self._ident = value
 
-    @property
-    def ident_base64(self) -> str:
-        """
-        :return: The face identity as a Base64 string
-        """
-        return self._ident_base64
-
-    @ident_base64.setter
-    def ident_base64(self, value: str):
-        """
-        :param value: The face identity as a Base64 string
-        """
-        self._ident_base64 = value
-
 
 class FaceTracker:
     """
@@ -112,6 +112,10 @@ class FaceTracker:
     """
 
     def __init__(self):
+        # The face identities
+        self._identities: Dict[int, Tuple[float, ...]] = {}
+        self._identities_lock = Lock()
+
         # The detection thread
         # We only need one of these, as each detection operation finds all faces in a frame
         # It would make no sense to parallelize detection across multiple frames simultaneously
@@ -126,8 +130,9 @@ class FaceTracker:
         # This allows us to submit work orders for recognizing individual faces without worrying about scheduling
         self._thread_pool_recognizers = ThreadPoolExecutor(max_workers=3)  # FIXME: Allow this to be set by the user
 
-        # The individual dlib object trackers
+        # The individual face trackers
         self._trackers = {}
+        self._tracker_images = {}
         self._trackers_lock = Lock()
         self._next_tracker_id = 0
 
@@ -139,6 +144,31 @@ class FaceTracker:
         # The list of "next track" futures
         self._next_track_futures = []
         self._next_track_futures_lock = Lock()
+
+    def add_identity(self, fid: int, ident: Tuple[float, ...]):
+        """
+        Add a new face identity to the tracker.
+
+        :param fid: The face ID
+        :param ident: The face identity (128-dimensional vector)
+        """
+
+        # Map the identity
+        self._identities_lock.acquire()
+        self._identities[fid] = ident
+        self._identities_lock.release()
+
+    def remove_identity(self, fid: int):
+        """
+        Remove a face identity from the tracker.
+
+        :param fid: The face ID
+        """
+
+        # Unmap the identity
+        self._identities_lock.acquire()
+        del self._identities[fid]
+        self._identities_lock.release()
 
     def start(self):
         """
@@ -192,6 +222,7 @@ class FaceTracker:
         for tracker_id in self._trackers.keys():
             # ...update it with the image!
             quality = self._trackers[tracker_id].update(image_np)
+            self._tracker_images[tracker_id] = image_np
 
             # Doom the trackers with low quality tracks
             if quality < 7:  # TODO: Allow user to set this
@@ -199,8 +230,8 @@ class FaceTracker:
 
         # Prune the doomed trackers
         for tracker_id in doomed_tracker_ids:
-            print(f'lost tracker {tracker_id}')
             self._trackers.pop(tracker_id, None)
+            self._tracker_images.pop(tracker_id, None)
 
         # Release trackers lock
         self._trackers_lock.release()
@@ -234,6 +265,16 @@ class FaceTracker:
         self._next_track_futures_lock.release()
 
         return future
+
+    def recognize(self, index: int):
+        """
+        Obtain a future on the recognition of a face track.
+
+        :param index: The track index
+        """
+
+        # Send off a request to recognize the face in this track
+        return self._thread_pool_recognizers.submit(self._recognize_main, index)
 
     def _thread_detection_main(self):
         """
@@ -289,9 +330,6 @@ class FaceTracker:
 
                 # Go over all detected faces
                 for face in faces:
-                    # Get center of face
-                    face_center: dlib.point = face.center()
-
                     # The ID of the matching outstanding tracker
                     # If we cannot make a match, then we have seen a new face (or at least a misplaced one)
                     face_id_match = None
@@ -347,8 +385,7 @@ class FaceTracker:
 
                         # Map the new tracker in
                         self._trackers[tracker_id] = new_tracker
-
-                        print(f'started tracker {tracker_id}')
+                        self._tracker_images[tracker_id] = frame_np
 
                         # Add some padding to the face rectangle
                         # TODO: Make this slop configurable
@@ -363,6 +400,7 @@ class FaceTracker:
 
                         # Info about the detected face
                         detected = DetectedFace()
+                        detected.index = tracker_id
                         detected.coords = (track_left, track_top, track_right, track_bottom)
 
                         # Complete all the next track futures
@@ -378,9 +416,40 @@ class FaceTracker:
             # Sleep for a bit
             time.sleep(0.5)
 
-    def _recognize_main(self):
+    def _recognize_main(self, index: int) -> RecognizedFace:
         """
         Main function for recognizing a face.
 
         This runs to completion on an as-needed basis given by a thread pool.
         """
+
+        # Lock trackers list
+        self._trackers_lock.acquire()
+
+        # Query the latest face bounding box from the tracker
+        position: dlib.rectangle = self._trackers[index].get_position()
+
+        # Get the image that corresponds to this tracker
+        image = self._tracker_images[index]
+
+        # Unlock trackers list
+        self._trackers_lock.release()
+
+        # Predict 68 unique points on the face
+        prediction = _predictor(image, dlib.rectangle(
+            int(position.left()),
+            int(position.top()),
+            int(position.right()),
+            int(position.bottom())
+        ))
+
+        # Compute the 128-dimensional vector embedding of the face
+        ident = _model.compute_face_descriptor(image, prediction, 1)
+
+        # Return info about the recognized face
+        rec = RecognizedFace()
+        rec.index = index
+        rec.coords = position
+        rec.fid = 10000  # TODO: Implement this
+        rec.ident = ident
+        return rec
