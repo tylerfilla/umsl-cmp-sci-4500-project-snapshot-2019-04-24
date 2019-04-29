@@ -392,12 +392,16 @@ class FaceTracker:
         This runs to completion on an as-needed basis given by a thread pool.
         """
 
+        print(f'A recognition worker has kicked off for tracker {index}')
+
         with self._trackers_lock:
             # Query the latest face bounding box from the tracker
             position: dlib.rectangle = self._trackers[index].get_position()
 
             # Get the image that corresponds to this tracker
             image = self._tracker_images[index]
+
+        print(f'Details gathered for tracker {index}; stand by for pose prediction...')
 
         # Predict 68 unique points on the face
         prediction = _predictor(image, dlib.rectangle(
@@ -407,13 +411,42 @@ class FaceTracker:
             int(position.bottom())
         ))
 
+        print(f'Face pose prediction succeeded on tracker {index}; computing vector embedding...')
+
         # Compute the 128-dimensional vector embedding of the face
-        ident = _model.compute_face_descriptor(image, prediction, 1)
+        ident = numpy.array(_model.compute_face_descriptor(image, prediction, 1))
+
+        print(f'Computed face embedding for tracker {index}; cross-referencing known faces...')
+
+        with self._identities_lock:
+            # Details about the best match
+            best_match_fid = -1  # Impossible by our definition of face IDs (valid only if >= 0)
+            best_match_distance = 0.6  # TODO: Make this user configurable (the maximum tolerance)
+
+            for other_fid in self._identities.keys():
+                # The other full-blown identity (128-dim vector embedding)
+                other_ident = numpy.array(self._identities[other_fid])
+
+                # In numpy, the norm of two vectors with ord=None and axis=1 is simply Euclidean distance
+                distance = numpy.linalg.norm([ident - other_ident], ord=None, axis=1)
+
+                # If this is a new best distance
+                if distance < best_match_distance:
+                    # Update best match details
+                    best_match_fid = other_fid
+                    best_match_distance = distance
+
+        print(f'Cross-referencing for tracker {index} completed')
+
+        if best_match_fid == -1:
+            print(f'The face for tracker {index} is not known')
+        else:
+            print(f'The face for tracker {index} known as {best_match_fid} in the database')
 
         # Return info about the recognized face
         rec = RecognizedFace()
         rec.index = index
         rec.coords = position
-        rec.fid = 10000  # TODO: Implement this
+        rec.fid = best_match_fid
         rec.ident = ident
         return rec
