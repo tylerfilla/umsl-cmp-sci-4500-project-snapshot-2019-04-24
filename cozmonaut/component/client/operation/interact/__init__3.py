@@ -7,9 +7,9 @@ import asyncio
 import threading
 from enum import Enum
 
+import PIL.Image
 import cozmo
 import cv2
-import numpy
 
 from cozmonaut.component.client.operation import AbstractClientOperation
 from cozmonaut.component.client.operation.interact.face_tracker import FaceTracker
@@ -73,101 +73,9 @@ class OperationInteract(AbstractClientOperation):
         self._thread.join()
 
     def main(self):
-        # Create an event loop on this thread
-        loop = asyncio.new_event_loop()
-
-        # The mode of interaction
-        mode = self._args.get('mode')
-
-        # The serial numbers for Cozmos A and B
-        serial_a = self._args.get('serial_a')
-        serial_b = self._args.get('serial_b')
-
-        print(f'Want Cozmo A to have serial number {serial_a or "(unknown)"}')
-        print(f'Want Cozmo B to have serial number {serial_b or "(unknown)"}')
-
-        while True:
-            # Connect to next available Cozmo
-            try:
-                conn = cozmo.connect_on_loop(loop)
-            except cozmo.exceptions.NoDevicesFound:
-                break
-
-            # Wait for the robot to become available
-            # We must do this to read its serial number
-            robot = loop.run_until_complete(conn.wait_for_robot())
-
-            print(f'Found a robot with serial {robot.serial}')
-
-            # Keep robot instances with desired serial numbers
-            if robot.serial == serial_a:
-                self._robot_a = robot
-            if robot.serial == serial_b:
-                self._robot_b = robot
-
-            # If both are assigned, we're good!
-            if self._robot_a is not None and self._robot_b is not None:
-                print('Both Cozmo A and Cozmo B assigned')
-                break
-
-        # A list for main function coroutines
-        # Coroutine objects for both the _cozmo_a_main and _cozmo_b_main async functions can go here
-        # Or neither of them can go here (that depends on which serial numbers were specified and found above)
-        coroutines_for_cozmo = []
-
-        # If we assigned a robot instance to play Cozmo A...
-        if self._robot_a is not None:
-            print(f'The role of Cozmo A is being played by robot {self._robot_a.serial}')
-
-            # Obtain a coroutine for Cozmo A main function
-            # Add the coroutine to the above coroutine list
-            coroutines_for_cozmo.append(self._cozmo_a_main(self._robot_a))
-        else:
-            print('Unable to cast the role of Cozmo A')
-
-            # If the current mode requires Cozmo A to be assigned
-            # The two modes that require this are "only_a" and "both"
-            if mode == OperationInteractMode.only_a or mode == OperationInteractMode.both:
-                print('Refusing to continue because Cozmo A was not assigned')
-                return
-            else:
-                print('Continuing without Cozmo A...')
-
-        # If we assigned a robot instance to play Cozmo B...
-        if self._robot_b is not None:
-            print(f'The role of Cozmo B is being played by robot {self._robot_b.serial}')
-
-            # Obtain a coroutine for Cozmo B main function
-            # Add the coroutine to the above coroutine list
-            coroutines_for_cozmo.append(self._cozmo_b_main(self._robot_b))
-        else:
-            print('Unable to cast the role of Cozmo B')
-
-            # If the current mode requires Cozmo B to be assigned
-            # The two modes that require this are "only_b" and "both"
-            if mode == OperationInteractMode.only_b or mode == OperationInteractMode.both:
-                print('Refusing to continue because Cozmo B was not assigned')
-                return
-            else:
-                print('Continuing without Cozmo B...')
-
-        # This wraps everything into one task object and schedules it on the loop
-        asyncio.gather(
-            # The operation watchdog (tells us when to call it quits)
-            self._watchdog(),
-
-            # Expand the main coroutines list into arguments
-            *coroutines_for_cozmo,
-
-            # Use the new loop
-            loop=loop,
-        )
-
         # Start the face trackers
         self._face_tracker_a.start()
         self._face_tracker_b.start()
-
-        # TODO: This is where we should read the database into the trackers
 
         # FIXME: Remove this later; this is Tyler's face encoding
         tyler_face = (
@@ -304,14 +212,71 @@ class OperationInteract(AbstractClientOperation):
         # FIXME: Remove this
         self._face_tracker_a.add_identity(42, tyler_face)
 
-        # Run the loop on this thread until it stops itself
-        loop.run_forever()
+        loop = asyncio.new_event_loop()
 
-        # TODO: This is where we should save from the trackers into the database
+        asyncio.gather(
+            self._recorder(),
+            self._face_thing(),
+            loop=loop,
+        )
+
+        loop.run_forever()
 
         # Stop the face trackers
         self._face_tracker_a.stop()
         self._face_tracker_b.stop()
+
+    async def _recorder(self):
+        # Open first video capture device
+        self._cap = cv2.VideoCapture(0)
+
+        while not self._stopping:
+            # Handle a frame
+            await self._on_frame()
+
+            # Yield control to other coroutines
+            await asyncio.sleep(0)
+
+        loop = asyncio.get_event_loop()
+        loop.call_soon(loop.stop)
+
+    async def _on_frame(self):
+        # Get the next frame
+        ret, frame = self._cap.read()
+
+        # Convert to Cozmo format
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = cv2.resize(frame, (320, 240))
+
+        # Update tracker
+        self._face_tracker_a.update(PIL.Image.fromarray(frame))
+
+        # Preview the output
+        cv2.imshow('Output', frame)
+
+        # Poll window and stop on Q down
+        if cv2.waitKey(1) == ord('q'):
+            self._stopping = True
+
+    async def _face_thing(self):
+        while not self._stopping:
+            # Wait for the next tracked face
+            track = await asyncio.wrap_future(self._face_tracker_a.next_track())
+
+            # TODO: Make Cozmo look at the face for social cue
+            #   Hopefully we don't lose the track b/c motion blur, but I think I know a hack if we do
+
+            await asyncio.sleep(0.25)  # Let motion blur settle down? Am I overestimating motion blur?
+
+            # Request to recognize the face
+            rec = await asyncio.wrap_future(self._face_tracker_a.recognize(track.index))
+
+            # TODO: Greet the face if rec.fid is not negative one
+            #  If rec.fid is negative one, then meet the new person and store a Base64 copy of rec.ident to the DB
+            #  Don't forget to then add it to the trackers with tracker_a.add_identity and tracker_b.add_identity
+
+            # Yield control to other coroutines
+            await asyncio.sleep(0)
 
     async def _watchdog(self):
         """
@@ -322,17 +287,19 @@ class OperationInteract(AbstractClientOperation):
         """
 
         while not self._stopping:
-            # Poll preview windows
-            if cv2.waitKey(1) == ord('q'):
-                self._should_stop = True
-
             # If the kill switch is set but we're not stopping yet
             if self._should_stop and not self._stopping:
                 # We're stopping now
                 self._stopping = True
 
-                # TODO: We need to drive both Cozmos back to their chargers, as the Ctrl+C or equivalent happened
-                print('DRIVING TO CHARGER NOT IMPLEMENTED YET')
+                while True:
+                    # TODO: We need to wait for both Cozmos to return to their chargers
+                    # TODO: Either add another global boolean or upgrade self._swap to a three-state int (where zero means none active, etc.)
+                    print(
+                        'Drive to charger not implemented yet (_watchdog in cozmonaut/component/client/operation/__init__.py ...)')
+
+                    # Yield control to other coroutines
+                    await asyncio.sleep(0)
 
                 # Politely ask the loop to stop
                 loop = asyncio.get_event_loop()
@@ -359,8 +326,6 @@ class OperationInteract(AbstractClientOperation):
 
         # Loop for Cozmo A
         while not self._stopping:
-            # TODO: Swap back and forth between active and idle
-
             # Yield control to other coroutines
             await asyncio.sleep(0)
 
@@ -378,9 +343,6 @@ class OperationInteract(AbstractClientOperation):
 
         :param evt: The event instance
         """
-
-        # Show camera preview
-        cv2.imshow('Cozmo A', cv2.cvtColor(numpy.array(evt.image), cv2.COLOR_BGR2RGB))
 
         # Send the image off to face tracker A
         self._face_tracker_a.update(evt.image)
@@ -403,8 +365,6 @@ class OperationInteract(AbstractClientOperation):
 
         # Loop for Cozmo B
         while not self._stopping:
-            # TODO: Swap back and forth between active and idle (but opposite that of Cozmo A)
-
             # Yield control to other coroutines
             await asyncio.sleep(0)
 
@@ -413,21 +373,6 @@ class OperationInteract(AbstractClientOperation):
 
         # Wait for battery coroutine to stop
         await coro_batt
-
-    def _cozmo_b_on_new_raw_camera_image(self, evt: cozmo.robot.camera.EvtNewRawCameraImage, **kwargs):
-        """
-        Event handler for Cozmo B's raw camera image event.
-
-        This function is not asynchronous, so go fast!
-
-        :param evt: The event instance
-        """
-
-        # Show camera preview
-        cv2.imshow('Cozmo B', cv2.cvtColor(numpy.array(evt.image), cv2.COLOR_BGR2RGB))
-
-        # Send the image off to face tracker B
-        self._face_tracker_b.update(evt.image)
 
     # TODO: THE ACTIVE AND IDLE FUNCTIONS BELOW ARE NOT BEING CALLED YET
 
@@ -456,10 +401,22 @@ class OperationInteract(AbstractClientOperation):
         """
 
         while not self._stopping:
-            # TODO: Is there any code for when we're on the charger? That would go here
+            # TODO: This is code that needs to run while on the charger
 
             # Yield control to other coroutines
             await asyncio.sleep(0)
+
+    def _cozmo_b_on_new_raw_camera_image(self, evt: cozmo.robot.camera.EvtNewRawCameraImage, **kwargs):
+        """
+        Event handler for Cozmo B's raw camera image event.
+
+        This function is not asynchronous, so go fast!
+
+        :param evt: The event instance
+        """
+
+        # Send the image off to face tracker B
+        self._face_tracker_b.update(evt.image)
 
     async def _battery_watcher(self, robot: cozmo.robot.Robot):
         """
@@ -475,8 +432,7 @@ class OperationInteract(AbstractClientOperation):
             # If battery potential is below the recommended "low" level
             if robot.battery_voltage < 3.5:
                 # TODO: Drive the robot back to charge and swap the next one in
-                print('DRIVING TO CHARGER NOT YET IMPLEMENTED')
-                print('SWAPPING THE COZMOS NOT YET IMPLEMENTED')
+                print('THE BATTERY IS LOW')
                 break
 
             # Yield control to other coroutines
@@ -488,44 +444,14 @@ class OperationInteract(AbstractClientOperation):
 
         This is responsible for watching for faces
 
-        :param robot: The robot instance
+        :param robot:
         """
 
         # Enable color imaging on this robot's camera
         robot.camera.color_image_enabled = True
         robot.camera.image_stream_enabled = True
 
-        # Pick the face tracker for this robot
-        # Cozmo A gets tracker A and Cozmo B gets tracker B
-        ft = None
-        if robot == self._robot_a:
-            ft = self._face_tracker_a
-        elif robot == self._robot_b:
-            ft = self._face_tracker_b
-
         while not self._stopping:
-            # Wait for the next face tracked by the tracker
-            track: face_tracker.DetectedFace = await asyncio.wrap_future(ft.next_track())
-
-            # TODO: Make Cozmo look at the face for social cue
-            #   Hopefully we don't lose the track b/c motion blur, but I think I know a hack if we do
-
-            print(f'{track.index} -> {track.coords}')
-
-            await asyncio.sleep(0.25)  # TODO: Let motion blur settle down? Am I overestimating motion blur?
-
-            # Request to recognize the face
-            rec = await asyncio.wrap_future(ft.recognize(track.index))
-
-            # TODO: Greet the face if rec.fid is not negative one
-            #  If rec.fid is negative one, then meet the new person and store a Base64 copy of rec.ident to the DB
-            #  Don't forget to then add it to the trackers with tracker_a.add_identity and tracker_b.add_identity
-
-            if rec.fid == -1:
-                await robot.say_text('I don\'t know you').wait_for_completed()
-            else:
-                await robot.say_text('Welcome back!').wait_for_completed()
-
             # Yield control to other coroutines
             await asyncio.sleep(0)
 

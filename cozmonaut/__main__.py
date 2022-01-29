@@ -11,7 +11,7 @@ from cozmonaut.component.client.operation.interact import OperationInteractMode
 if __name__ == '__main__':
     # Arguments for Cozmo interactions
     args = {
-        'mode': OperationInteractMode.both,
+        'mode': OperationInteractMode.only_a,
         'serial_a': '45a18821',
         'serial_b': None,  # No second Cozmo yet
     }
@@ -24,7 +24,7 @@ if __name__ == '__main__':
 
     # Wait to simulate running other stuff
     # TODO: This is where we can run the text-to-speech input (ncurses?), install ^C handler, etc.
-    time.sleep(3)
+    time.sleep(600)
 
     # Stop client component
     comp.stop()
